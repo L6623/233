@@ -4,21 +4,27 @@ const { createProxyMiddleware } = require('http-proxy-middleware');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Proxy para YouTube embeds (nocookie para mejor bypass y privacidad)
-app.use('/embed', createProxyMiddleware({
+// Proxy FULL a YouTube-nocookie (todo el dominio)
+app.use('/', createProxyMiddleware({
   target: 'https://www.youtube-nocookie.com',
   changeOrigin: true,
-  pathRewrite: { '^/embed': '/embed' },
-  ws: true, // si necesitas live o algo
+  ws: true,
+  onProxyReq: (proxyReq, req) => {
+    // Spoof Referer (truco principal para que YouTube no bloquee)
+    proxyReq.setHeader('Referer', 'https://www.youtube.com/');
+    proxyReq.setHeader('Origin', 'https://www.youtube.com');
+    proxyReq.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+  },
   onProxyRes: (proxyRes) => {
-    // Quita headers que podrían romper el iframe
+    // Quita TODOS los headers que rompen el embed
     delete proxyRes.headers['x-frame-options'];
     delete proxyRes.headers['content-security-policy'];
-    proxyRes.headers['access-control-allow-origin'] = '*'; // ayuda en algunos casos
+    delete proxyRes.headers['strict-transport-security'];
+    proxyRes.headers['access-control-allow-origin'] = '*';
   }
 }));
 
-// Página principal con el embed integrado (servida directamente)
+// Página principal con embed minimizado + búsqueda por ID
 app.get('/', (req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -29,83 +35,42 @@ app.get('/', (req, res) => {
       <title>Notas de Clase - Videos</title>
       <link rel="icon" href="https://www.google.com/favicon.ico"/>
       <style>
-        body { margin:0; background:#111; color:#eee; font-family:Arial,sans-serif; height:100vh; overflow:hidden; }
-        header { background:#202124; padding:10px; text-align:center; border-bottom:2px solid #065fd4; }
+        body { margin:0; background:#111; color:#eee; font-family:Arial; height:100vh; overflow:hidden; }
+        header { background:#202124; padding:10px; text-align:center; }
         h1 { margin:0; font-size:20px; }
         .controls { margin:15px auto; text-align:center; }
-        input { padding:10px; width:60%; max-width:400px; font-size:16px; border:none; border-radius:4px 0 0 4px; outline:none; }
-        button { padding:10px 20px; background:#065fd4; color:white; border:none; border-radius:0 4px 4px 0; cursor:pointer; font-weight:bold; }
-        button:hover { background:#054aa3; }
-        #playerContainer { height:calc(100vh - 140px); position:relative; transition:all 0.3s ease; }
+        input { padding:10px; width:60%; max-width:400px; border-radius:4px 0 0 4px; }
+        button { padding:10px 20px; background:#065fd4; color:white; border:none; border-radius:0 4px 4px 0; cursor:pointer; }
+        #playerContainer { height:calc(100vh - 140px); position:relative; transition:all 0.3s; }
         #playerContainer.minimized { height:180px; }
         iframe { width:100%; height:100%; border:none; }
-        #minimizeBtn { position:absolute; top:10px; right:10px; background:rgba(0,0,0,0.7); color:white; border:none; padding:8px 12px; border-radius:50%; cursor:pointer; z-index:10; font-size:18px; }
-        #minimizeBtn:hover { background:rgba(255,255,255,0.3); }
-        #info { text-align:center; font-size:13px; color:#888; margin:10px; }
+        #minimizeBtn { position:absolute; top:10px; right:10px; background:rgba(0,0,0,0.7); color:white; border:none; padding:8px 12px; border-radius:50%; cursor:pointer; z-index:10; }
       </style>
     </head>
     <body>
-      <header><h1>Videos Educativos</h1></header>
-
+      <header><h1>Videos Educativos (Proxy Propio)</h1></header>
       <div class="controls">
-        <input type="text" id="videoInput" placeholder="Pega ID o link completo (ej: dQw4w9WgXcQ)" />
+        <input type="text" id="videoInput" placeholder="Pega ID o link (ej: dQw4w9WgXcQ)" />
         <button onclick="loadVideo()">Cargar</button>
       </div>
-
       <div id="playerContainer" class="minimized">
         <button id="minimizeBtn" onclick="toggleMinimize()">⬇️</button>
-        <iframe id="ytEmbed" src="about:blank" allowfullscreen allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"></iframe>
+        <iframe id="ytEmbed" src="about:blank" allowfullscreen allow="autoplay"></iframe>
       </div>
-
-      <div id="info">
-        Todo queda aquí mismo (sin salir a YouTube). Minimiza con el botón. Pega ID o link — ej: https://www.youtube.com/watch?v=dQw4w9WgXcQ
-      </div>
-
       <script>
-        const container = document.getElementById('playerContainer');
-        const iframe = document.getElementById('ytEmbed');
-        const input = document.getElementById('videoInput');
-
-        function toggleMinimize() {
-          container.classList.toggle('minimized');
-        }
-
+        function toggleMinimize() { document.getElementById('playerContainer').classList.toggle('minimized'); }
         function loadVideo() {
-          let inputVal = input.value.trim();
-          if (!inputVal) return alert('Pega un ID o link we!');
-
-          // Extrae ID si es link completo
-          let videoId = inputVal;
-          if (inputVal.includes('v=')) {
-            const urlParams = new URLSearchParams(new URL(inputVal).search);
-            videoId = urlParams.get('v');
-          } else if (inputVal.includes('youtu.be/')) {
-            videoId = inputVal.split('youtu.be/')[1].split('?')[0];
-          }
-
-          if (!videoId) return alert('No se detectó ID válido');
-
-          // Carga desde el proxy /embed
-          iframe.src = '/embed/' + videoId + '?autoplay=1&rel=0&modestbranding=1&showinfo=0&controls=1';
-
-          // Expande al cargar
-          container.classList.remove('minimized');
+          let val = document.getElementById('videoInput').value.trim();
+          let id = val;
+          if (val.includes('v=')) id = new URLSearchParams(new URL(val).search).get('v');
+          if (val.includes('youtu.be/')) id = val.split('youtu.be/')[1];
+          document.getElementById('ytEmbed').src = '/' + id + '?autoplay=1&rel=0&modestbranding=1';
+          document.getElementById('playerContainer').classList.remove('minimized');
         }
-
-        // Enter para buscar
-        input.addEventListener('keypress', (e) => {
-          if (e.key === 'Enter') loadVideo();
-        });
-
-        // Opcional: video default minimizado
-        // input.value = 'dQw4w9WgXcQ'; loadVideo();
       </script>
     </body>
     </html>
   `);
 });
 
-// Inicia servidor
-app.listen(PORT, () => {
-  console.log(`Servidor proxy corriendo en puerto ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Proxy YouTube corriendo en ${PORT}`));
